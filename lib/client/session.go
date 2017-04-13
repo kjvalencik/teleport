@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/gravitational/teleport/lib/sshutils"
 	"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/trace"
+	colorable "github.com/mattn/go-colorable"
 	"golang.org/x/crypto/ssh"
 
 	log "github.com/Sirupsen/logrus"
@@ -98,6 +100,11 @@ func newSession(client *NodeClient,
 		namespace:  client.Namespace,
 		closer:     utils.NewCloseBroadcaster(),
 	}
+
+	if runtime.GOOS == "windows" && ns.isTerminalAttached() {
+		ns.stdout = colorable.NewColorable(os.Stdout)
+	}
+
 	// if we're joining an existing session, we need to assume that session's
 	// existing/current terminal size:
 	if joinSession != nil {
@@ -105,7 +112,7 @@ func newSession(client *NodeClient,
 		ns.namespace = joinSession.Namespace
 		tsize := joinSession.TerminalParams.Winsize()
 		if ns.isTerminalAttached() {
-			err = term.SetWinsize(0, tsize)
+			err = term.SetWinsize(os.Stdout.Fd(), tsize)
 			if err != nil {
 				log.Error(err)
 			}
@@ -203,11 +210,11 @@ func (ns *NodeSession) interactiveSession(callback interactiveCallback) error {
 
 	// switch the terminal to raw mode (and switch back on exit!)
 	if ns.isTerminalAttached() {
-		ts, err := term.SetRawTerminal(0)
+		ts, err := term.SetRawTerminal(os.Stdin.Fd())
 		if err != nil {
 			log.Warn(err)
 		} else {
-			defer term.RestoreTerminal(0, ts)
+			defer term.RestoreTerminal(os.Stdin.Fd(), ts)
 		}
 	}
 	// wait for the session to end
@@ -224,7 +231,7 @@ func (ns *NodeSession) allocateTerminal(termType string, s *ssh.Session) (io.Rea
 		Height: teleport.DefaultTerminalHeight,
 	}
 	if ns.isTerminalAttached() {
-		tsize, err = term.GetWinsize(0)
+		tsize, err = term.GetWinsize(os.Stdout.Fd())
 		if err != nil {
 			log.Error(err)
 		}
@@ -267,8 +274,8 @@ func (ns *NodeSession) allocateTerminal(termType string, s *ssh.Session) (io.Rea
 func (ns *NodeSession) updateTerminalSize(s *ssh.Session) {
 	// sibscribe for "terminal resized" signal:
 	sigC := make(chan os.Signal, 1)
-	signal.Notify(sigC, syscall.SIGWINCH)
-	currentSize, _ := term.GetWinsize(0)
+	watchWindowChange(sigC)
+	currentSize, _ := term.GetWinsize(os.Stdout.Fd())
 
 	// start the timer which asks for server-side window size changes:
 	siteClient, err := ns.nodeClient.Proxy.ConnectToSite(context.TODO(), true)
@@ -288,7 +295,7 @@ func (ns *NodeSession) updateTerminalSize(s *ssh.Session) {
 				return
 			}
 			// get the size:
-			winSize, err := term.GetWinsize(0)
+			winSize, err := term.GetWinsize(os.Stdout.Fd())
 			if err != nil {
 				log.Warnf("[CLIENT] Error getting size: %s", err)
 				break
@@ -327,13 +334,13 @@ func (ns *NodeSession) updateTerminalSize(s *ssh.Session) {
 			log.Infof("[CLIENT] updating the session %v with %d parties", sess.ID, len(sess.Parties))
 
 			newSize := sess.TerminalParams.Winsize()
-			currentSize, err = term.GetWinsize(0)
+			currentSize, err = term.GetWinsize(os.Stdout.Fd())
 			if err != nil {
 				log.Error(err)
 			}
 			if currentSize.Width != newSize.Width || currentSize.Height != newSize.Height {
 				// ok, something have changed, let's resize to the new parameters
-				err = term.SetWinsize(0, newSize)
+				err = term.SetWinsize(os.Stdout.Fd(), newSize)
 				if err != nil {
 					log.Error(err)
 				}
@@ -426,18 +433,7 @@ func (ns *NodeSession) watchSignals(shell io.Writer) {
 			}
 		}
 	}()
-	// Catch Ctrl-Z signal
-	ctrlZSignal := make(chan os.Signal, 1)
-	signal.Notify(ctrlZSignal, syscall.SIGTSTP)
-	go func() {
-		for {
-			<-ctrlZSignal
-			_, err := shell.Write([]byte{26})
-			if err != nil {
-				log.Errorf(err.Error())
-			}
-		}
-	}()
+	catchTerminalStopSignal(shell)
 }
 
 // pipeInOut launches two goroutines: one to pipe the local input into the remote shell,

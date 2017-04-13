@@ -201,7 +201,7 @@ func ApplyFileConfig(fc *FileConfig, cfg *service.Config) error {
 
 	// TODO(klizhentas): Removed on sasha/ha?
 	if strings.ToLower(fc.Logger.Output) == "syslog" {
-		utils.SwitchLoggingtoSyslog()
+		utils.SwitchLoggingtoSystemLogger()
 	}
 
 	// log warning if someone is using seed config

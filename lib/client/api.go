@@ -1237,7 +1237,7 @@ func (tc *TeleportClient) AskPassword() (pwd string, err error) {
 
 // passwordFromConsole reads from stdin without echoing typed characters to stdout
 func passwordFromConsole() (string, error) {
-	fd := syscall.Stdin
+	fd := int(os.Stdin.Fd())
 	state, err := terminal.GetState(fd)
 
 	// intercept Ctr+C and restore terminal
