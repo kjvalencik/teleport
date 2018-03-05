@@ -219,9 +219,18 @@ func SSHAgentOIDCLogin(proxyAddr, connectorID string, pubKey []byte, ttl time.Du
 	if runtime.GOOS == "darwin" {
 		command = "open"
 	}
-	path, err := exec.LookPath(command)
-	if err == nil {
-		exec.Command(path, re.RedirectURL).Start()
+
+	if runtime.GOOS == "windows" {
+		exec.Command(
+			"rundll32",
+			"url.dll,FileProtocolHandler",
+			re.RedirectURL,
+		).Start()
+	} else {
+		path, err := exec.LookPath(command)
+		if err == nil {
+			exec.Command(path, re.RedirectURL).Start()
+		}
 	}
 
 	log.Infof("waiting for response on %v", server.URL)
